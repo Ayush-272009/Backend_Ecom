@@ -21,7 +21,7 @@ router.get(
   authMiddleware.isAuthenticated,
   userController.getProductById
 );
-router.post(
+router.get(
   "/order/:id",
   authMiddleware.isAuthenticated,
   userController.createOrder

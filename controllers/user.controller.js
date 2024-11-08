@@ -1,13 +1,14 @@
 const userModel = require("../models/user.model");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
-const blackListmodel = require("../models/blacklist.model");
+const blackListModel = require("../models/blacklist.model");
 const productModel = require("../models/product.model");
-const Razorpay = require("razorpay");
 const paymentModel = require("../models/payment.model");
 const orderModel = require("../models/order.model");
 
-var instance = new Razorpay({
+const Razorpay = require("razorpay");
+
+const instance = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
@@ -23,18 +24,16 @@ module.exports.signup = async (req, res, next) => {
     }
 
     const isUserAlreadyExists = await userModel.findOne({ email });
-
     if (isUserAlreadyExists) {
       return res.status(400).json({
         message: "User already exists",
       });
     }
 
-    const hashedpassword = await bcrypt.hash(password, 10);
-
+    const hashedPassword = await bcrypt.hash(password, 10);
     const user = await userModel.create({
       email,
-      password: hashedpassword,
+      password: hashedPassword,
       username,
       role,
     });
@@ -44,7 +43,7 @@ module.exports.signup = async (req, res, next) => {
     });
 
     res.status(201).json({
-      message: "user created successfully",
+      message: "User created successfully",
       user,
       token,
     });
@@ -59,20 +58,18 @@ module.exports.signin = async (req, res, next) => {
 
     if (!email || !password) {
       return res.status(400).json({
-        message: "All the fields are required",
+        message: "All fields are required",
       });
     }
 
     const user = await userModel.findOne({ email });
-
     if (!user) {
       return res.status(400).json({
-        message: "Invalid User or Password",
+        message: "Invalid email or password",
       });
     }
 
     const isPasswordCorrect = await bcrypt.compare(password, user.password);
-
     if (!isPasswordCorrect) {
       return res.status(400).json({
         message: "Invalid email or password",
@@ -89,34 +86,34 @@ module.exports.signin = async (req, res, next) => {
       token,
     });
   } catch (error) {
-    next(err);
+    next(error);
   }
 };
 
 module.exports.logout = async (req, res, next) => {
   try {
-    const { token } = req.headers.authorization.split(" ")[1];
-
+    const token = req.headers.authorization.split(" ")[1];
     if (!token) {
       return res.status(400).json({
         message: "Token is required",
       });
     }
 
-    const isTokenblacklisted = await blackListmodel.findOne({ token });
-
-    if (isTokenblacklisted) {
+    const isTokenBlacklisted = await blackListModel.findOne({ token });
+    if (isTokenBlacklisted) {
       return res.status(400).json({
         message: "Token is already blacklisted",
       });
     }
 
-    await blackListmodel.create({ token });
+    await blackListModel.create({ token });
+    res.status(200).json({
+      message: "User logged out successfully",
+    });
   } catch (error) {
     next(error);
   }
 };
-
 //This code helps handle the logout functionality in a Node.js app
 //where JWT tokens are used for authentication.
 // When a user logs out, their token is added to the blacklist
@@ -126,9 +123,8 @@ module.exports.logout = async (req, res, next) => {
 module.exports.getProfile = async (req, res, next) => {
   try {
     const user = await userModel.findById(req.user._id);
-
     res.status(200).json({
-      message: "User successfully fetched",
+      message: "User fetched successfully",
       user,
     });
   } catch (error) {
@@ -139,7 +135,6 @@ module.exports.getProfile = async (req, res, next) => {
 module.exports.getProducts = async (req, res, next) => {
   try {
     const products = await productModel.find({});
-
     res.status(200).json({
       products,
     });
@@ -151,7 +146,6 @@ module.exports.getProducts = async (req, res, next) => {
 module.exports.getProductById = async (req, res, next) => {
   try {
     const product = await productModel.findById(req.params.id);
-
     res.status(200).json({
       product,
     });
@@ -163,25 +157,30 @@ module.exports.getProductById = async (req, res, next) => {
 module.exports.createOrder = async (req, res, next) => {
   try {
     const product = await productModel.findById(req.params.id);
+    if (!product) {
+      return res.status(404).json({
+        message: "Product not found",
+      });
+    }
 
-    const option = {
-      amount: product.amount * 100,
+    const options = {
+      amount: product.price * 100,
       currency: "INR",
-      receipt: product._id,
+      receipt: product._id.toString(),
     };
 
-    const order = await instance.orders.create(option);
-    //yha orders razorpay se aara hai
+    const order = await instance.orders.create(options);
 
-    res.status(200).json({
-      order,
-    });
-
-    const payment = await paymentModel.create({
-      order_id: order.id,
-      amount: product.amount,
+    await paymentModel.create({
+      orderId: order.id,
+      amount: product.price,
       currency: "INR",
       status: "pending",
+    });
+
+    res.status(200).json({
+      message: "Order created successfully",
+      order,
     });
   } catch (error) {
     next(error);
@@ -191,37 +190,35 @@ module.exports.createOrder = async (req, res, next) => {
 module.exports.verifyPayment = async (req, res, next) => {
   try {
     const { paymentId, orderId, signature } = req.body;
-    const secret = process.env.RAZORPAY_KEY_SECRET;
     const {
       validatePaymentVerification,
-    } = require("../node_modules/razorpay/dist/utils/razorpay-utils.js");
+    } = require("razorpay/dist/utils/razorpay-utils");
 
     const isValid = validatePaymentVerification(
-      {
-        order_id: orderId,
-        payment_id: paymentId,
-      },
+      { order_id: orderId, payment_id: paymentId },
       signature,
-      secret
+      process.env.RAZORPAY_KEY_SECRET
     );
 
-    if (isValid) {
-      const payment = await paymentModel.findOne({
-        orderId: orderId,
+    const payment = await paymentModel.findOne({ orderId });
+    if (!payment) {
+      return res.status(404).json({
+        message: "Order not found",
       });
+    }
 
+    if (isValid) {
       payment.paymentId = paymentId;
       payment.signature = signature;
-      paayment.status = "success";
-
+      payment.status = "success";
       await payment.save();
 
       res.status(200).json({
         message: "Payment verified successfully",
       });
     } else {
-      const payment = await paymentModel.findOne({ orderId: orderId });
       payment.status = "failed";
+      await payment.save();
 
       res.status(400).json({
         message: "Payment verification failed",
